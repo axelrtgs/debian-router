@@ -1,14 +1,25 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
+set -eu
 
 sourceDir=$(dirname $0)
-sourceVer=debian-v9-router
-sourceTar=https://github.com/JAMESMTL/${sourceVer}/tarball/master
+repoVer=feature/debian10
+sourceVer=$(basename $repoVer)
+sourceTar=https://github.com/axelrtgs/debian-router/tarball/${repoVer}
+
+error_exit() {
+  printf "\nFATAL ERROR: $1\n"
+  printf "installer exiting!\nYour system is likely in a broken state.\nPlease report this issue.\n"
+  exit 1
+}
+
+export DEBIAN_FRONTEND="noninteractive"
 
 dirList=" \
 	/opt/router/files \
 	/opt/router/install \
-	/root/router/action \
-	/root/router/config \
+	/home/router/action \
+	/home/router/config \
 "
 
 echo
@@ -19,39 +30,43 @@ echo
 
 echo -n "Verifying user ... "
 if [ ${USER} != 'root' ]; then
-	echo "FAILED"
-	echo "Not running as root, exiting."
-	echo
-	exit
+	error_exit "Not running as root, exiting."
 else
 	echo "ok"
 fi
 
 echo
 echo "##########################################################"
-echo "Enabling root ssh access"
+echo "Disabling SSH password authentication"
 echo "##########################################################"
 echo
 
-if grep -qE '^PermitRootLogin yes$' /etc/ssh/sshd_config; then
-	echo "root ssh login already enabled ... skipping"
-else
-	echo -n "writting to /etc/ssh/sshd_config ... "
+while true; do
+  read -p "Disable SSH password authentication (y/n)? " yn
+  case $yn in
+    [Yy]* )
+      echo
 
-	echo >> /etc/ssh/sshd_config
-	echo PermitRootLogin yes >> /etc/ssh/sshd_config
+      if grep -qE '^PasswordAuthentication no$' /etc/ssh/sshd_config; then
+        echo "PasswordAuthentication already disabled ... skipping"
+      else
+        echo -n "checking if key present in authorized_keys file ... "
+        grep -qE '^ssh-rsa' /home/router/.ssh/authorized_keys && echo ok || error_exit "Please copy ssh key using 'ssh-copy-id -i ~/.ssh/id_rsa.pub router@<ROUTER IP>'"
 
-	grep -qE '^PermitRootLogin yes$' /etc/ssh/sshd_config && echo ok || echo FAILED
-fi
+        echo -n "Disabling PasswordAuthentication ... "
 
-echo
-echo "##########################################################"
-echo "Restarting sshd"
-echo "##########################################################"
-echo
+        sed -i -E 's/^#?PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
 
-echo -n "Restarting sshd service ... "
-service sshd restart && echo ok || echo FAILED
+        grep -qE '^PasswordAuthentication no$' /etc/ssh/sshd_config && echo "ok" || error_exit "FAILED"
+
+        systemctl restart sshd
+      fi
+      break;;
+    [Nn]* )
+      echo Skipping ...
+      break;;
+  esac
+done
 
 echo
 echo "##########################################################"
@@ -62,16 +77,23 @@ echo
 for listItem in $dirList; do
 	echo -n "creating directory ${listItem} ... "
 	[ ! -d "${listItem}" ] && mkdir -p ${listItem}
-	[ -d "${listItem}" ] && echo ok || echo FAILED
+	[ -d "${listItem}" ] && echo "ok" || error_exit "FAILED"
 done
 
 echo
 echo "##########################################################"
-echo "Eanbling non-free repo and updating"
+echo "Eanbling extra repos and updating"
 echo "##########################################################"
 echo
 
-sed -i 's/stretch main$/stretch main non-free/g' /etc/apt/sources.list
+# remove cdrom source to only get packages from internet
+sed -i '/^deb cdrom/d' /etc/apt/sources.list
+
+echo 'deb http://deb.debian.org/debian buster-backports main contrib non-free' > /etc/apt/sources.list.d/buster-backports.list
+
+apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
+echo "deb https://ookla.bintray.com/debian $(lsb_release -sc) main" >  /etc/apt/sources.list.d/speedtest.list
+
 apt update
 apt upgrade -y
 
@@ -81,11 +103,14 @@ echo "Installing base and utility packages"
 echo "##########################################################"
 echo
 
-apt install -y vlan bridge-utils net-tools ppp ipset traceroute nmap conntrack \
-	ndisc6 whois dnsutils mtr iperf3 curl resolvconf sudo apt-transport-https \
-	tcpdump ethtool irqbalance firmware-bnx2x
+apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
+echo "deb https://ookla.bintray.com/debian $(lsb_release -sc) main" >  /etc/apt/sources.list.d/speedtest.list
 
-# Detect hypervisor 
+apt install -y vlan bridge-utils net-tools ppp ipset traceroute nmap conntrack git \
+	ndisc6 whois dnsutils mtr iperf3 curl resolvconf sudo apt-transport-https \
+	tcpdump ethtool irqbalance lshw vim firmware-bnx2x speedtest tuned unzip
+
+# Detect hypervisor
 if grep -q hypervisor /proc/cpuinfo; then
 
 	echo
@@ -110,26 +135,136 @@ fi
 
 echo
 echo "##########################################################"
+echo "Installing cockpit"
+echo "##########################################################"
+echo
+
+cockpitInstalled=no
+
+while true; do
+  read -p "Install cockpit (y/n)? " yn
+  case $yn in
+    [Yy]* )
+      echo
+      apt install -y cockpit
+
+      cockpitInstalled=yes
+      echo -n "Generating macOS Catalina compatible certificate"
+      hostname="router.internal.axelrtgs.com"
+      subject="/C=US/ST=State/L=City/O=Organization/CN=${hostname}"
+      filename=/etc/cockpit/ws-certs.d/0-self-signed
+      openssl req \
+          -newkey rsa:2048  -nodes  -keyout ${filename}.key \
+          -new -x509 -sha256 -days 365 -out ${filename}.cert \
+          -subj "${subject}" \
+          -addext "subjectAltName = DNS:${hostname}" \
+          -addext "extendedKeyUsage = serverAuth" > /dev/null
+      cat /etc/cockpit/ws-certs.d/0-self-signed.key >> /etc/cockpit/ws-certs.d/0-self-signed.cert
+      rm /etc/cockpit/ws-certs.d/0-self-signed.key
+      systemctl restart cockpit
+      break;;
+    [Nn]* )
+      echo Skipping ...
+      break;;
+  esac
+done
+
+echo
+echo "##########################################################"
+echo "Enabling 2FA"
+echo "##########################################################"
+echo
+
+while true; do
+  read -p "Enable 2FA (y/n)? " yn
+  case $yn in
+    [Yy]* )
+      echo
+      apt install -y libpam-google-authenticator
+
+      echo "Generating 2FA for router user"
+      if [ -f /home/router/.google_authenticator ]; then
+        echo "2FA already configured ... skipping"
+      else
+        sudo -u router google-authenticator
+      fi
+
+      echo "Configuring sudo for 2FA"
+      if grep -qE '^auth required pam_google_authenticator.so$' /etc/pam.d/sudo; then
+        echo "Sudo 2FA already enabled ... skipping"
+      else
+        echo "
+# google authenticator for two-factor
+auth required pam_google_authenticator.so" >> /etc/pam.d/sudo
+      fi
+
+      echo "Configuring SSH for 2FA"
+      if grep -qE '^ChallengeResponseAuthentication yes$' /etc/ssh/sshd_config; then
+        echo "ChallengeResponseAuthentication already enabled ... skipping"
+      else
+        echo -n "Enabling ChallengeResponseAuthentication ... "
+
+        sed -i 's/^ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/g' /etc/ssh/sshd_config
+
+        grep -qE '^ChallengeResponseAuthentication yes$' /etc/ssh/sshd_config && echo "ok" || error_exit "FAILED"
+
+        systemctl restart sshd
+      fi
+
+      if grep -qE '^auth required pam_google_authenticator.so$' /etc/pam.d/sshd; then
+        echo "SSH 2FA already enabled ... skipping"
+      else
+        echo "
+# google authenticator for two-factor
+auth required pam_google_authenticator.so" >> /etc/pam.d/sshd
+
+        systemctl restart sshd
+      fi
+
+      if [ $cockpitInstalled = 'yes' ]; then
+        echo "Configuring Cockpit for 2FA"
+
+        if grep -qE '^auth required pam_google_authenticator.so$' /etc/pam.d/cockpit; then
+          echo "Cockpit 2FA already enabled ... skipping"
+        else
+          echo "
+# google authenticator for two-factor
+auth required pam_google_authenticator.so" >> /etc/pam.d/cockpit
+
+        systemctl restart cockpit
+        fi
+      fi
+      break;;
+    [Nn]* )
+      echo Skipping ...
+      break;;
+  esac
+done
+
+echo
+echo "##########################################################"
 echo "Installing services"
 echo "##########################################################"
 echo
 
-apt install -y unbound dnsmasq inadyn openvpn wide-dhcpv6-client miniupnpd
+apt install -y unbound dnsmasq inadyn wide-dhcpv6-client igmpproxy wireguard
 
-service dnsmasq stop
-service unbound stop
+systemctl stop dnsmasq
+systemctl stop  unbound
+
+# TODO: wireguard configs -> https://www.cyberciti.biz/faq/debian-10-set-up-wireguard-vpn-server/
 
 echo
 echo "##########################################################"
-echo "Installing igmpproxy 0.2.1 from buster"
+echo "Installing mdns-repeater"
 echo "##########################################################"
 echo
 
 useLocalCopy=no
 useLocalPath=""
 
-[ -f "/opt/router/install/igmpproxy_0.2.1-1_amd64.deb" ] && useLocalPath="/opt/router/install/igmpproxy_0.2.1-1_amd64.deb"
-[ -f "${sourceDir}/igmpproxy_0.2.1-1_amd64.deb" ] && useLocalPath="${sourceDir}/igmpproxy_0.2.1-1_amd64.deb"
+[ -f "/opt/router/install/mdns-repeater-1.9.zip" ] && useLocalPath="/opt/router/install/mdns-repeater-1.9.zip"
+[ -f "${sourceDir}/mdns-repeater-1.9.zip" ] && useLocalPath="${sourceDir}/mdns-repeater-1.9.zip"
 
 # Detect if local version exists
 if [ ! -z "$useLocalPath" ]; then
@@ -150,52 +285,20 @@ if [ ! -z "$useLocalPath" ]; then
 	echo
 fi
 
-[ "$useLocalCopy"  = 'no' ] && wget -q -O /opt/router/install/igmpproxy_0.2.1-1_amd64.deb http://ftp.us.debian.org/debian/pool/main/i/igmpproxy/igmpproxy_0.2.1-1_amd64.deb
-dpkg -i /opt/router/install/igmpproxy_0.2.1-1_amd64.deb
+[ "$useLocalCopy"  = 'no' ] && wget -q -O /opt/router/install/mdns-repeater.tar.gz https://github.com/kennylevinsen/mdns-repeater/archive/1.11.tar.gz
+rm -rf /opt/router/install/mdns-repeater/
+mkdir -p /opt/router/install/mdns-repeater/
+tar -xzvf /opt/router/install/mdns-repeater.tar.gz -C /opt/router/install/mdns-repeater --strip-components=1
+pushd /opt/router/install/mdns-repeater > /dev/null
+echo -n "Building mdns-repeater ... "
+make &> /dev/null && echo "ok" || error_exit "FAILED"
+popd > /dev/null
 
-echo
-echo "##########################################################"
-echo "Installing miniupnpd 2.1 from buster"
-echo "##########################################################"
-echo
+echo -n "Copying mdns-repeater ... "
+cp /opt/router/install/mdns-repeater/mdns-repeater /usr/bin/ && echo "ok" || error_exit "FAILED"
 
-useLocalCopy=no
-useLocalPath=""
-
-[ -f "/opt/router/install/miniupnpd_2.1-5_amd64.deb" ] && useLocalPath="/opt/router/install/miniupnpd_2.1-5_amd64.deb"
-[ -f "${sourceDir}/miniupnpd_2.1-5_amd64.deb" ] && useLocalPath="${sourceDir}/miniupnpd_2.1-5_amd64.deb"
-
-# Detect if local version exists
-if [ ! -z "$useLocalPath" ]; then
-	while true; do
-		read -p "Local copy of found, use local copy (y/n)? " yn
-		case $yn in
-			[Yy]* )
-				useLocalCopy=yes
-				if [ $(dirname $useLocalPath) != "/opt/router/install" ]; then
-					cp $useLocalPath /opt/router/install
-				fi
-				break;;
-			[Nn]* )
-				useLocalCopy=no
-				break;;
-		esac
-	done
-	echo
-fi
-
-[ "$useLocalCopy"  = 'no' ] && wget -q -O /opt/router/install/miniupnpd_2.1-5_amd64.deb http://ftp.us.debian.org/debian/pool/main/m/miniupnpd/miniupnpd_2.1-5_amd64.deb
-dpkg-deb -x /opt/router/install/miniupnpd_2.1-5_amd64.deb /tmp/miniupnpd
-
-cp /tmp/miniupnpd/usr/sbin/miniupnpd /usr/sbin
-
-echo "cleaning up the mess ..."
-echo -n "rm /etc/default/miniupnpd ... "
-rm /etc/default/miniupnpd && echo ok || echo FAILED
-echo -n "rm /etc/init.d/miniupnpd ... "
-rm /etc/init.d/miniupnpd && echo ok || echo FAILED
-echo -n "rm /etc/miniupnpd/* ... "
-rm /etc/miniupnpd/* && echo ok || echo FAILED
+echo -n "Setting permissions mdns-repeater ... "
+chmod +x /usr/bin/mdns-repeater && echo "ok" || error_exit "FAILED"
 
 echo
 echo "##########################################################"
@@ -206,7 +309,7 @@ echo
 # Copy install to /opt/router/install/
 if [ $sourceDir != "/opt/router/install" ]; then
 	echo -n "copying $0 /opt/router/install/ ... "
-	cp $0 /opt/router/install/ && echo ok || echo FAILED
+	cp $0 /opt/router/install/ && echo "ok" || error_exit "FAILED"
 fi
 
 useLocalSource=no
@@ -231,11 +334,11 @@ fi
 if [ $useLocalSource = 'yes' ]; then
 		echo -n "copying ${sourceDir}/${sourceVer}.tar.gz -> /opt/router/install/${sourceVer}.tar.gz ... "
 		cp ${sourceDir}/${sourceVer}.tar.gz /opt/router/install/
-		[ -f "/opt/router/install/${sourceVer}.tar.gz" ] && echo ok || echo FAILED
+		[ -f "/opt/router/install/${sourceVer}.tar.gz" ] && echo "ok" || error_exit "FAILED"
 else
 		echo -n "fetching /opt/router/install/${sourceVer}.tar.gz ... "
 		wget -q ${sourceTar} -O /opt/router/install/${sourceVer}.tar.gz
-		[ -f "/opt/router/install/${sourceVer}.tar.gz" ] && echo ok || echo FAILED
+		[ -f "/opt/router/install/${sourceVer}.tar.gz" ] && echo "ok" || error_exit "FAILED"
 fi
 
 echo
@@ -245,10 +348,11 @@ echo "##########################################################"
 echo
 
 # Get file list from archive
-fileList=$(tar -tvf /opt/router/install/${sourceVer}.tar.gz | awk '{print $6}' | grep -oE '^.*/files/.*' | sed "s/.*-${sourceVer}-.*\/files\///g" | grep -vE '/$')
+fileList=$(tar -tvf /opt/router/install/${sourceVer}.tar.gz | awk '{print $6}' | grep -oE '^.*/files/.*' | sed "s/^.*\/files\///g" | grep -vE '/$')
 
 # Extract archive
-tar -C /opt/router/files/ -xvf /opt/router/install/${sourceVer}.tar.gz --strip=2 | sed "s/.*-${sourceVer}-.*\/files\///g" | grep -vE '/$'
+rm -rf /opt/router/files/*
+tar -C /opt/router/files/ -xvf /opt/router/install/${sourceVer}.tar.gz --strip-components=2 | sed -E "s/^[^\/]*\///g" | sed "s/^files\///g" | grep -vE '/$'
 
 echo
 echo "##########################################################"
@@ -262,7 +366,7 @@ if [ ! -d "/opt/router/files.bak/" ]; then
 			echo -n "backing up /${listItem} ... "
 			[ ! -d "/opt/router/files.bak/$(dirname $listItem)" ] && mkdir -p "/opt/router/files.bak/$(dirname $listItem)"
 			cp /${listItem} /opt/router/files.bak/$(dirname $listItem)
-			[ -f "/opt/router/files.bak/${listItem}" ] && echo ok || echo FAILED
+			[ -f "/opt/router/files.bak/${listItem}" ] && echo "ok" || error_exit "FAILED"
 		fi
 	done
 else
@@ -279,7 +383,7 @@ for listItem in $fileList; do
 	echo -n "copying /opt/router/files/${listItem} -> /${listItem} ... "
 	[ ! -d "/$(dirname $listItem)" ] && mkdir -p /$(dirname $listItem)
 	cp /opt/router/files/${listItem} /${listItem}
-	[ -f "/${listItem}" ] && echo ok || echo FAILED
+	[ -f "/${listItem}" ] && echo "ok" || error_exit "FAILED"
 done
 
 echo
@@ -289,92 +393,80 @@ echo "######################################"
 echo
 
 # config cron symlinks
-echo -n "creating /root/router/config/cron_jobs ... "
-ln -sf /etc/cron.d/cronjobs /root/router/config/cron_jobs && echo ok || echo FAILED
+echo -n "creating /home/router/config/cron_jobs ... "
+ln -sf /etc/cron.d/cronjobs /home/router/config/cron_jobs && echo "ok" || error_exit "FAILED"
 
 # config dhcp symlinks
-echo -n "creating /root/router/config/dhcp_base ... "
-ln -sf /opt/router/dnsmasq/dnsmasq.conf.router /root/router/config/dhcp_base && echo ok || echo FAILED
-echo -n "creating /root/router/config/dhcp_hosts ... "
-ln -sf /opt/router/dnsmasq/dnsmasq.hosts /root/router/config/dhcp_hosts && echo ok || echo FAILED
-echo -n "creating /root/router/config/dhcp_v6-pd_config ... "
-ln -sf /etc/wide-dhcpv6/dhcp6c.conf /root/router/config/dhcp_v6-pd_config && echo ok || echo FAILED
-
-# config ddns symlinks
-echo -n "creating /root/router/config/ddns_he_tunnel ... "
-ln -sf /opt/router/scripts/ddns/ddns-ipv4-he-tunnel /root/router/config/ddns_he_tunnel && echo ok || echo FAILED
-echo -n "creating /root/router/config/ddns_inadyn ... "
-ln -sf /etc/inadyn.conf /root/router/config/ddns_inadyn && echo ok || echo FAILED
+echo -n "creating /home/router/config/dhcp_base ... "
+ln -sf /opt/router/dnsmasq/dnsmasq.conf.router /home/router/config/dhcp_base && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/dhcp_hosts ... "
+ln -sf /opt/router/dnsmasq/dnsmasq.hosts /home/router/config/dhcp_hosts && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/dhcp_v6-pd_config ... "
+ln -sf /etc/wide-dhcpv6/dhcp6c.conf /home/router/config/dhcp_v6-pd_config && echo "ok" || error_exit "FAILED"
 
 # config dns symlinks
-echo -n "creating /root/router/config/dns_base ... "
-ln -sf /opt/router/unbound/unbound.conf /root/router/config/dns_base && echo ok || echo FAILED
-echo -n "creating /root/router/config/dns_blocklists ... "
-ln -sf /opt/router/scripts/services/adblock /root/router/config/dns_blocklists && echo ok || echo FAILED
-echo -n "creating /root/router/config/dns_split_static ... "
-ln -sf /opt/router/unbound/unbound.static /root/router/config/dns_split_static && echo ok || echo FAILED
+echo -n "creating /home/router/config/unbound ... "
+ln -sf /etc/unbound/unbound.conf.d /home/router/config/unbound && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/adblock ... "
+ln -sf /opt/router/adblock /home/router/config/adblock && echo "ok" || error_exit "FAILED"
+
+# config ddns symlinks
+echo -n "creating /home/router/config/ddns_he_tunnel ... "
+ln -sf /opt/router/scripts/ddns/ddns-ipv4-he-tunnel /home/router/config/ddns_he_tunnel && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/ddns_inadyn ... "
+ln -sf /etc/inadyn.conf /home/router/config/ddns_inadyn && echo "ok" || error_exit "FAILED"
 
 # config firewall symlinks
-echo -n "creating /root/router/config/firewall_dns_redirect_v4.set ... "
-ln -sf /opt/router/nftables/dns_redirect_v4.set /root/router/config/firewall_dns_redirect_v4.set && echo ok || echo FAILED
-echo -n "creating /root/router/config/firewall_dns_redirect_v6.set ... "
-ln -sf /opt/router/nftables/dns_redirect_v6.set /root/router/config/firewall_dns_redirect_v6.set && echo ok || echo FAILED
-echo -n "creating /root/router/config/firewall_forwarding_v4.set ... "
-ln -sf /opt/router/nftables/port_forwarding_v4.set /root/router/config/firewall_forwarding_v4.set && echo ok || echo FAILED
-echo -n "creating /root/router/config/firewall_forwarding_v6.set ... "
-ln -sf /opt/router/nftables/port_forwarding_v6.set /root/router/config/firewall_forwarding_v6.set && echo ok || echo FAILED
-echo -n "creating /root/router/config/firewall_rules_v4 ... "
-ln -sf /opt/router/nftables/iptables.rules /root/router/config/firewall_rules_v4 && echo ok || echo FAILED
-echo -n "creating /root/router/config/firewall_rules_v6 ... "
-ln -sf /opt/router/nftables/ip6tables.rules /root/router/config/firewall_rules_v6 && echo ok || echo FAILED
+echo -n "creating /home/router/config/firewall_dns_redirect_v4.set ... "
+ln -sf /opt/router/nftables/dns_redirect_v4.set /home/router/config/firewall_dns_redirect_v4.set && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/firewall_dns_redirect_v6.set ... "
+ln -sf /opt/router/nftables/dns_redirect_v6.set /home/router/config/firewall_dns_redirect_v6.set && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/firewall_forwarding_v4.set ... "
+ln -sf /opt/router/nftables/port_forwarding_v4.set /home/router/config/firewall_forwarding_v4.set && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/firewall_forwarding_v6.set ... "
+ln -sf /opt/router/nftables/port_forwarding_v6.set /home/router/config/firewall_forwarding_v6.set && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/firewall_rules_v4 ... "
+ln -sf /opt/router/nftables/iptables.rules /home/router/config/firewall_rules_v4 && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/firewall_rules_v6 ... "
+ln -sf /opt/router/nftables/ip6tables.rules /home/router/config/firewall_rules_v6 && echo "ok" || error_exit "FAILED"
 
 # config igmpproxy symlinks
-echo -n "creating /root/router/config/igmpproxy_config ... "
-ln -sf /etc/igmpproxy.conf /root/router/config/igmpproxy_config && echo ok || echo FAILED
-
-# config miniupnpd symlinks
-echo -n "creating /root/router/config/miniupnpd_config ... "
-ln -sf /etc/miniupnpd/miniupnpd.conf /root/router/config/miniupnpd_config && echo ok || echo FAILED
+echo -n "creating /home/router/config/igmpproxy_config ... "
+ln -sf /etc/igmpproxy.conf /home/router/config/igmpproxy_config && echo "ok" || error_exit "FAILED"
 
 # config network symlinks
-echo -n "creating /root/router/config/network_interfaces ... "
-ln -sf /etc/network/interfaces.router /root/router/config/network_interfaces && echo ok || echo FAILED
-echo -n "creating /root/router/config/network_persistent_rules ... "
-ln -sf /etc/udev/rules.d/70-persistent-net.rules /root/router/config/network_persistent_rules && echo ok || echo FAILED
-echo -n "creating /root/router/config/network_pppoe ... "
-ln -sf /etc/ppp/peers/pppoe.conf /root/router/config/network_pppoe && echo ok || echo FAILED
-echo -n "creating /root/router/config/network_wan_up ... "
-ln -sf /opt/router/scripts/system/wan-up /root/router/config/network_wan_up && echo ok || echo FAILED
-
-# config openvpn symlinks
-echo -n "creating /root/router/config/openvpn_config ... "
-ln -sf /etc/openvpn /root/router/config/openvpn_config && echo ok || echo FAILED
-echo -n "creating /root/router/config/openvpn_defaults ... "
-ln -sf /etc/default/openvpn /root/router/config/openvpn_defaults && echo ok || echo FAILED
+echo -n "creating /home/router/config/network_interfaces ... "
+ln -sf /etc/network/interfaces.router /home/router/config/network_interfaces && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/network_persistent_rules ... "
+ln -sf /etc/udev/rules.d/70-persistent-net.rules /home/router/config/network_persistent_rules && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/network_pppoe ... "
+ln -sf /etc/ppp/peers/pppoe.conf /home/router/config/network_pppoe && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/config/network_wan_up ... "
+ln -sf /opt/router/scripts/system/wan-up /home/router/config/network_wan_up && echo "ok" || error_exit "FAILED"
 
 # actions symlinks
-echo -n "creating /root/router/action/activate.sh ... "
-ln -sf /opt/router/scripts/system/activate /root/router/action/activate.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/adblock.sh ... "
-ln -sf /opt/router/scripts/services/adblock /root/router/action/adblock.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/backup.sh ... "
-ln -sf /opt/router/scripts/system/backup /root/router/action/backup.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/filelist.sh ... "
-ln -sf /opt/router/scripts/system/filelist /root/router/action/filelist.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/forwarding-rules.sh ... "
-ln -sf /opt/router/scripts/system/forwarding-rules /root/router/action/forwarding-rules.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/restore.sh ... "
-ln -sf /opt/router/scripts/system/restore /root/router/action/restore.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/ssh-lock.sh ... "
-ln -sf /opt/router/scripts/system/ssh-lock /root/router/action/ssh-lock.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/ssh-reset.sh ... "
-ln -sf /opt/router/scripts/system/ssh-reset /root/router/action/ssh-reset.sh && echo ok || echo FAILED
-echo -n "creating /root/router/action/ssh-unlock.sh ... "
-ln -sf /opt/router/scripts/system/ssh-unlock /root/router/action/ssh-unlock.sh && echo ok || echo FAILED
+echo -n "creating /home/router/action/activate.sh ... "
+ln -sf /opt/router/scripts/system/activate /home/router/action/activate.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/adblock.sh ... "
+ln -sf /opt/router/scripts/services/adblock /home/router/action/adblock.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/backup.sh ... "
+ln -sf /opt/router/scripts/system/backup /home/router/action/backup.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/filelist.sh ... "
+ln -sf /opt/router/scripts/system/filelist /home/router/action/filelist.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/forwarding-rules.sh ... "
+ln -sf /opt/router/scripts/system/forwarding-rules /home/router/action/forwarding-rules.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/restore.sh ... "
+ln -sf /opt/router/scripts/system/restore /home/router/action/restore.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/ssh-lock.sh ... "
+ln -sf /opt/router/scripts/system/ssh-lock /home/router/action/ssh-lock.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/ssh-reset.sh ... "
+ln -sf /opt/router/scripts/system/ssh-reset /home/router/action/ssh-reset.sh && echo "ok" || error_exit "FAILED"
+echo -n "creating /home/router/action/ssh-unlock.sh ... "
+ln -sf /opt/router/scripts/system/ssh-unlock /home/router/action/ssh-unlock.sh && echo "ok" || error_exit "FAILED"
 
 echo
 echo "##########################################################"
-echo "Install backup of locally modified files"
+echo "Restore backup of locally modified files"
 echo "##########################################################"
 echo
 
@@ -404,11 +496,11 @@ else
 fi
 
 # Extract local backup
-if [ $useLocalCopy = 'yes' ]; then	
+if [ $useLocalCopy = 'yes' ]; then
 	if [ $(dirname $useLocalPath) != "/opt/router/install" ]; then
 		echo
 		echo -n "copying $useLocalPath -> /opt/router/install/${sourceVer}-local.tar.gz ... "
-		cp $useLocalPath /opt/router/install && echo ok || echo FAILED					
+		cp $useLocalPath /opt/router/install && echo "ok" || error_exit "FAILED"
 	fi
 
 	echo "Extracting files ..."
@@ -418,7 +510,7 @@ fi
 
 echo
 echo "##########################################################"
-echo "Install backup of extra files"
+echo "Restore backup of extra files"
 echo "##########################################################"
 echo
 
@@ -448,11 +540,11 @@ else
 fi
 
 # Extract extra files backup
-if [ $useLocalCopy = 'yes' ]; then	
+if [ $useLocalCopy = 'yes' ]; then
 	if [ $(dirname $useLocalPath) != "/opt/router/install" ]; then
 		echo
 		echo -n "copying $useLocalPath -> /opt/router/install/${sourceVer}-extras.tar.gz ... "
-		cp $useLocalPath /opt/router/install && echo ok || echo FAILED					
+		cp $useLocalPath /opt/router/install && echo "ok" || error_exit "FAILED"
 	fi
 
 	echo "Extracting files ..."
@@ -466,26 +558,19 @@ echo "Reloading daemon configs"
 echo "######################################"
 echo
 
-echo -n "Removing miniupnpd init... "
-update-rc.d miniupnpd remove && echo "ok" || echo "FAILED"
 echo -n "disabling autostart of wide-dhcpv6-client ... "
-update-rc.d wide-dhcpv6-client disable && echo "ok" || echo "FAILED"
-echo -n "unmasking miniupnpd ... "
-systemctl unmask miniupnpd && echo "ok" || echo "FAILED"
+update-rc.d wide-dhcpv6-client disable && echo "ok" || error_exit "FAILED"
 echo -n "reloading daemon configs ... "
-systemctl daemon-reload  && echo "ok" || echo "FAILED"
+systemctl daemon-reload && echo "ok" || error_exit "FAILED"
 
 echo
 echo "######################################"
-echo "creating new ssh keys"
+echo "Enabling systemd services"
 echo "######################################"
 echo
 
-[ -d "/root/.ssh" ] && rm /root/.ssh/*
-echo -n "generating ssh keys ... "
-ssh-keygen -f /root/.ssh/${USER}@$(cat /etc/hostname) -t rsa -N '' -q && echo "ok" || echo "FAILED"
-echo -n "replacing authorized keys ... "
-cp /root/.ssh/${USER}@$(cat /etc/hostname).pub /root/.ssh/authorized_keys && echo "ok" || echo "FAILED"
+echo -n "mdns-repeater ... "
+systemctl enable mdns-repeater && echo "ok" || error_exit "FAILED"
 
 echo
 echo "##########################################################"
@@ -494,13 +579,13 @@ echo "##########################################################"
 echo
 
 echo -n "chmod 755 /etc/ppp/ip-down.local ... "
-chmod 755 /etc/ppp/ip-down.local && echo ok || echo FAILED
+chmod 755 /etc/ppp/ip-down.local && echo "ok" || error_exit "FAILED"
 echo -n "chmod 755 /etc/ppp/ip-up.local ... "
-chmod 755 /etc/ppp/ip-up.local && echo ok || echo FAILED
+chmod 755 /etc/ppp/ip-up.local && echo "ok" || error_exit "FAILED"
 echo -n "chmod 755 -R /opt/router/install/*.sh ... "
-chmod 755 -R /opt/router/install/*.sh && echo ok || echo FAILED
+chmod 755 -R /opt/router/install/*.sh && echo "ok" || error_exit "FAILED"
 echo -n "chmod 755 -R /opt/router/scripts ... "
-chmod 755 -R /opt/router/scripts && echo ok || echo FAILED
+chmod 755 -R /opt/router/scripts && echo "ok" || error_exit "FAILED"
 
 # Test if is activated following restore
 if [ -s /opt/router/install/.activated ]; then
@@ -515,7 +600,7 @@ if [ -s /opt/router/install/.activated ]; then
 
 	echo "remapping ~/router/config/dhcp_base -> /opt/router/dnsmasq/dnsmasq.conf"
 	ln -sf /opt/router/dnsmasq/dnsmasq.conf ~/router/config/dhcp_base
-	
+
 	echo
 	echo "The router will be fully active the next time you boot."
 	echo "Make sure the original router is shutdown before booting."
@@ -540,7 +625,3 @@ else
 	echo "Make sure the original router is shutdown before booting."
 	echo
 fi
-
-# Store version
-echo "$sourceVer" > /opt/router/install/.version
-cp /opt/router/install/.version /opt/router/files/opt/router/install/

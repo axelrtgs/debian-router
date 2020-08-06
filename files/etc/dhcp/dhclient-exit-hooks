@@ -59,12 +59,13 @@ cdr2mask ()
 # ${IF}-dns: DNS Servers
 ###################################################
 
-IPTV_ZONE_FILE=/opt/router/unbound/unbound.iptv
+IPTV_ZONE_FILE=/etc/unbound/unbound.conf.d/iptv.conf
 
 forwardZones=" \
-	bell.ca \
-	bell.com \
-	iptv.microsoft.com \
+  bell.ca \
+  bell.com \
+  iptv.microsoft.com \
+  tv.fibreop.ca \
 "
 
 # Set SYSVARS path
@@ -73,46 +74,50 @@ SYSVARS=/tmp/sysvars
 
 case "$interface" in
 
-	wan0.36)
-		# Clear default route
-		ip route del default via $new_routers dev wan0.36 2>/dev/null
+  bell_iptv)
+    # Clear default route
+    ip route del default via $new_routers dev bell_iptv 2>/dev/null
 
-		# Write vars to SYSVARS dir
-		[ ! -z "$new_ip_address" ] && echo "$new_ip_address" > ${SYSVARS}/iptv-local
-		[ ! -z "$new_routers" ] && echo "$new_routers" > ${SYSVARS}/iptv-gateway
-		[ ! -z "$new_subnet_mask" ] && echo "${new_network_number}/$(mask2cdr ${new_subnet_mask})" > ${SYSVARS}/iptv-prefix
-		[ ! -z "$new_domain_name_servers" ] && echo "$new_domain_name_servers" > ${SYSVARS}/iptv-dns
+    # Write vars to SYSVARS dir
+    [ ! -z "$new_ip_address" ] && echo "$new_ip_address" > ${SYSVARS}/iptv-local
+    [ ! -z "$new_routers" ] && echo "$new_routers" > ${SYSVARS}/iptv-gateway
+    [ ! -z "$new_subnet_mask" ] && echo "${new_network_number}/$(mask2cdr ${new_subnet_mask})" > ${SYSVARS}/iptv-prefix
+    [ ! -z "$new_domain_name_servers" ] && echo "$new_domain_name_servers" > ${SYSVARS}/iptv-dns
 
-		# Write to unbound.iptv zones files
-		echo "# Dynamically created file - DO NOT EDIT MANUALLY" > $IPTV_ZONE_FILE
-		echo >> $IPTV_ZONE_FILE
-		
-		for forwardZone in $forwardZones; do
-			echo "forward-zone:"  >> $IPTV_ZONE_FILE
-			echo "	name: \"${forwardZone}.\""  >> $IPTV_ZONE_FILE
-			for new_domain_name_server in $new_domain_name_servers; do
-				echo "	forward-addr: ${new_domain_name_server}"  >> $IPTV_ZONE_FILE
-			done
-			echo "	forward-first: no"  >> $IPTV_ZONE_FILE
-			echo >> $IPTV_ZONE_FILE
-		done		
+    # Write to unbound.iptv zones files
+    echo "# Dynamically created file - DO NOT EDIT MANUALLY" > $IPTV_ZONE_FILE
+    echo >> $IPTV_ZONE_FILE
 
-		# Restart unbound if name servers change
-		# [ "$new_domain_name_servers" != "$old_domain_name_servers" ] && service unbound restart
-		
-		# Restart igmpproxy if vlan 36 IP or gateway changes
-		if [ "$new_ip_address" !=  "$old_ip_address" ] || [ "$new_routers" != "$old_routers" ]; then
-			service igmpproxy restart
-		fi
-		;;
-         
-	*)
-		# Write vars to SYSVARS dir
-		[ ! -z "$new_ip_address" ] && echo "$new_ip_address" > ${SYSVARS}/${interface}-local
-		[ ! -z "$new_routers" ] && echo "$new_routers" > ${SYSVARS}/${interface}-gateway
-		[ ! -z "$new_subnet_mask" ] && echo "${new_network_number}/$(mask2cdr ${new_subnet_mask})" > ${SYSVARS}/${interface}-prefix
-		[ ! -z "$new_domain_name_servers" ] && echo "$new_domain_name_servers" > ${SYSVARS}/${interface}-dns
-		;;
+    for forwardZone in $forwardZones; do
+      echo "server:"  >> $IPTV_ZONE_FILE
+      echo "  private-domain: \"${forwardZone}\""  >> $IPTV_ZONE_FILE
+      echo "  domain-insecure: \"${forwardZone}\""  >> $IPTV_ZONE_FILE
+
+      echo "forward-zone:"  >> $IPTV_ZONE_FILE
+      echo "	name: \"${forwardZone}.\""  >> $IPTV_ZONE_FILE
+      for new_domain_name_server in $new_domain_name_servers; do
+        echo "	forward-addr: ${new_domain_name_server}"  >> $IPTV_ZONE_FILE
+      done
+      echo "	forward-first: no"  >> $IPTV_ZONE_FILE
+      echo >> $IPTV_ZONE_FILE
+    done
+
+    # Restart unbound if name servers change
+    [ "$new_domain_name_servers" != "$old_domain_name_servers" ] && service unbound restart
+
+    # Restart igmpproxy if vlan 36 IP or gateway changes
+    if [ "$new_ip_address" !=  "$old_ip_address" ] || [ "$new_routers" != "$old_routers" ]; then
+      service igmpproxy restart
+    fi
+    ;;
+
+  *)
+    # Write vars to SYSVARS dir
+    [ ! -z "$new_ip_address" ] && echo "$new_ip_address" > ${SYSVARS}/${interface}-local
+    [ ! -z "$new_routers" ] && echo "$new_routers" > ${SYSVARS}/${interface}-gateway
+    [ ! -z "$new_subnet_mask" ] && echo "${new_network_number}/$(mask2cdr ${new_subnet_mask})" > ${SYSVARS}/${interface}-prefix
+    [ ! -z "$new_domain_name_servers" ] && echo "$new_domain_name_servers" > ${SYSVARS}/${interface}-dns
+    ;;
 esac
 
 ###################################################

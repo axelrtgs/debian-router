@@ -10,23 +10,35 @@ interface=lan*
 
 # DNS
 port=10053
-domain=lan
-auth-zone=lan
+auth-server=internal.axelrtgs.com
+domain=internal.axelrtgs.com
+local=/internal.axelrtgs.com/
 expand-hosts
 no-hosts
+bogus-priv
+domain-needed
+filterwin2k
 
 # DHCP
 dhcp-authoritative
-dhcp-option=6,0.0.0.0
-dhcp-option=option6:dns-server,[fe80::]
 
-# Interface lan0
-dhcp-range=192.168.2.10,192.168.2.254
+dhcp-range=lan_main,192.168.0.50,192.168.0.150,4h
 #dhcp-range=::1000,::FFFF,constructor:lan0,ra-names,slaac
+dhcp-option=lan_main,option:router,192.168.0.254
+dhcp-option=lan_main,option:dns-server,192.168.0.254,192.168.0.1
+dhcp-option=lan_main,option:netmask,255.255.255.0
 
-# Interface lan0.10 (sample guest network on vlan 10)
-#dhcp-range=192.168.10.2,192.168.10.254
+dhcp-range=lan_iot,192.168.2.100,192.168.2.200,7d
 #dhcp-range=::1000,::FFFF,constructor:lan0,ra-names,slaac
+dhcp-option=lan_iot,option:router,192.168.2.1
+dhcp-option=lan_iot,option:dns-server,192.168.2.1,192.168.2.254
+dhcp-option=lan_iot,option:netmask,255.255.255.0
+
+dhcp-range=lan_ipcam,192.168.3.100,192.168.3.150,30d
+#dhcp-range=::1000,::FFFF,constructor:lan0,ra-names,slaac
+dhcp-option=lan_ipcam,option:router,192.168.3.1
+dhcp-option=lan_ipcam,option:dns-server,192.168.3.1,192.168.3.254
+dhcp-option=lan_ipcam,option:netmask,255.255.255.0
 
 # RA
 enable-ra
@@ -37,13 +49,13 @@ quiet-dhcp
 quiet-dhcp6
 
 # Resolv file
-#resolv-file=/opt/router/dnsmasq/dnsmasq.resolv
 no-resolv
+no-poll
 
 # Config Files
 conf-file=/tmp/dnsmasq.router
 dhcp-hostsfile=/opt/router/dnsmasq/dnsmasq.hosts
 dhcp-leasefile=/opt/router/dnsmasq/dnsmasq.leases
 
-# Assign lan0 IP to router.lan
-interface-name=router.lan,lan0
+# Assign lan_main IP to router.internal.axelrtgs.com
+interface-name=router.internal.axelrtgs.com,lan_main

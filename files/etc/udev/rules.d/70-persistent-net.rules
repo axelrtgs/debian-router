@@ -3,5 +3,8 @@
 #
 # Use these rules to remap NIC interface names from predictable names to static names
 
-KERNEL=="ens192", ATTR{address}=="00:50:56:00:01:01", NAME="wan0"
-KERNEL=="ens224", ATTR{address}=="00:50:56:00:01:02", NAME="lan0"
+KERNEL=="ens256", ATTR{address}=="00:0c:29:b2:bb:64", NAME="bell_internet"
+KERNEL=="ens192", ATTR{address}=="00:0c:29:b2:bb:63", NAME="bell_iptv"
+KERNEL=="ens224", ATTR{address}=="00:0c:29:b2:bb:fe", NAME="lan_main"
+KERNEL=="ens161", ATTR{address}=="00:0c:29:b2:bb:08", NAME="lan_iot"
+KERNEL=="ens193", ATTR{address}=="00:0c:29:b2:bb:12", NAME="lan_ipcam"

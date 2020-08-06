@@ -8,9 +8,7 @@ COMMIT
 *mangle
 :PREROUTING ACCEPT [0:0]
 :OUTPUT ACCEPT [0:0]
-:MINIUPNPD - [0:0]
--A PREROUTING -i ppp+ -j MINIUPNPD
--A INPUT -i wan0.36 -s 10.2.0.0/16 -d 239.0.0.0/8 -p udp -j DROP
+-A INPUT -i bell_iptv -s 10.2.0.0/16 -d 239.0.0.0/8 -p udp -j DROP
 -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 COMMIT
 *nat
@@ -18,32 +16,25 @@ COMMIT
 :POSTROUTING ACCEPT [0:0]
 :OUTPUT ACCEPT [0:0]
 :DNATHOSTS - [0:0]
-:MINIUPNPD - [0:0]
-:MINIUPNPD-POSTROUTING - [0:0]
--A PREROUTING ! -d 10.0.0.0/8 -p udp --dport 53 -m set --match-set DNS-LOCAL-V4 src -j REDIRECT --to-port 53
--A PREROUTING ! -d 10.0.0.0/8 -p tcp --dport 53 -m set --match-set DNS-LOCAL-V4 src -j REDIRECT --to-port 53
+-A PREROUTING ! -d 10.2.0.0/16 -p udp --dport 53 -m set --match-set DNS-LOCAL-V4 src -j REDIRECT --to-port 53
+-A PREROUTING ! -d 10.2.0.0/16 -p tcp --dport 53 -m set --match-set DNS-LOCAL-V4 src -j REDIRECT --to-port 53
 -A PREROUTING -i ppp+ -j DNATHOSTS
--A PREROUTING -i ppp+ -j MINIUPNPD
--A POSTROUTING -o ppp+ -j MINIUPNPD-POSTROUTING
 -A POSTROUTING -o ppp+ -j MASQUERADE
--A POSTROUTING -o ovpn+ -j MASQUERADE
--A POSTROUTING -o wan0.36 -j MASQUERADE
+-A POSTROUTING -o bell_iptv -j MASQUERADE
 COMMIT
 *filter
 :INPUT ACCEPT [0:0]
 :FORWARD ACCEPT [0:0]
 :OUTPUT ACCEPT [0:0]
-:MINIUPNPD - [0:0]
 :SERVICES - [0:0]
 -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 -A INPUT -m state --state INVALID -j DROP
--A INPUT -i wan0.36 -p igmp -j ACCEPT
--A INPUT -i wan0.36 -p udp -m udp --sport 67 --dport 68 -j ACCEPT
--A INPUT -i ovpn+ -j DROP
+-A INPUT -i bell_iptv -p igmp -j ACCEPT
+-A INPUT -i bell_iptv -p udp -m udp --sport 67 --dport 68 -j ACCEPT
 -A INPUT -i ppp+ -j SERVICES
 -A INPUT -i ppp+ -j DROP
--A INPUT -i wan+ -j DROP
--A INPUT -i lan0 -j ACCEPT
+-A INPUT -i bell+ -j DROP
+-A INPUT -i lan+ -j ACCEPT
 -A INPUT -i lan+ -p udp --dport 67 -j ACCEPT
 -A INPUT -i lan+ -p udp --dport 53 -j ACCEPT
 -A INPUT -i lan+ -p tcp --dport 53 -j ACCEPT
@@ -54,18 +45,14 @@ COMMIT
 -A INPUT -j REJECT
 -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 -A FORWARD -m state --state INVALID -j DROP
--A FORWARD -i wan0.36 -o lan0 -s 10.2.0.0/16 -d 239.0.0.0/8 -p udp -j ACCEPT
--A FORWARD -i ovpn+ -j DROP
+-A FORWARD -i bell_iptv -o lan_main -s 10.2.0.0/16 -d 239.0.0.0/8 -p udp -j ACCEPT
 -A FORWARD -o lan+ -m set --match-set HOSTS-GLOBAL-V4 dst,dst -j ACCEPT
--A FORWARD -i ppp+ -o lan+ -j MINIUPNPD
 -A FORWARD -i ppp+ -j DROP
--A FORWARD -i wan+ -j DROP
+-A FORWARD -i bell+ -j DROP
 -A FORWARD -o ppp+ -j ACCEPT
--A FORWARD -o wan0.36 -j ACCEPT
--A FORWARD -o ovpn+ -j ACCEPT
+-A FORWARD -o bell_iptv -j ACCEPT
 -A FORWARD -i tun+ -o lan0 -j ACCEPT
 -A FORWARD -j REJECT
--A SERVICES -s 66.220.2.74 -p icmp -j ACCEPT
 #-A SERVICES -p tcp --dport 22 -j ACCEPT
 #-A SERVICES -p udp --dport 1194 -j ACCEPT
 COMMIT

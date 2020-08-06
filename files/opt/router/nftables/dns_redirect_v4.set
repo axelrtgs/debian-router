@@ -16,4 +16,6 @@ flush -! DNS-LOCAL-V4
 # example: add -! DNS-LOCAL-V4 192.168.10.20-192.168.10.254		// Force dns redirection of an ip range
 
 # Redirect all IPv4 DNS requests from LAN to router
-# add -! DNS-LOCAL-V4 198.168.2.0/24
+add -! DNS-LOCAL-V4 198.168.0.0/16
+add -! DNS-LOCAL-V4 172.16.0.0/12
+add -! DNS-LOCAL-V4 10.0.0.0/8

@@ -1,0 +1,12 @@
+[Unit]
+Description=mDNS Repeater
+After=network.target
+
+[Service]
+Type=simple
+Restart=on-failure
+ExecStart=/usr/bin/mdns-repeater lan_main lan_iot
+PIDFile=/var/run/mdns-repeater.pid
+
+[Install]
+WantedBy=multi-user.target

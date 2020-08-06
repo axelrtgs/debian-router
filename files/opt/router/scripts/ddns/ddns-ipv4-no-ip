@@ -27,11 +27,11 @@ DDNS_PASSWORD=henet_prefix_pass
 DDNS_HOST=he_host_999999
 DDNS_DOMAIN=
 DDNS_KEY=
-DDNS_REQUEST="https://ipv4.tunnelbroker.net/nic/update?username=${DDNS_USERNAME}&password=${DDNS_PASSWORD}&hostname=${DDNS_HOST}&myip={DDNS_IP}"
+DDNS_REQUEST="http://${DDNS_USERNAME}:${DDNS_PASSWORD}@dynupdate.no-ip.com/nic/update?hostname=${DDNS_HOST}&myip={DDNS_IP}"
 
 DDNS_IF=$LOGICAL
 DDNS_IP_TYPE=ipv4
-DDNS_CACHE_PATH=/opt/router/ddns/ddns-ipv4-he-tunnel
+DDNS_CACHE_PATH=/opt/router/ddns/ddns-ipv4-no-ip
 DDNS_AGENT=JAMESMTL-DDNS
 
 DDNS_UPDATE_DAYS=10

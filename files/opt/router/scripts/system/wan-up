@@ -3,7 +3,7 @@
 ###################################################
 # Read passed parameters from SYSVARS directory
 ###################################################
-# wan-logical: Logical Interface 
+# wan-logical: Logical Interface
 # wan-physical: Physical Interface
 # wan-local: Local IP
 # wan-gateway: Gateway IP
@@ -38,7 +38,6 @@ chown unbound:unbound /var/lib/unbound/root.key && chmod 644 /var/lib/unbound/ro
 cat /opt/router/nftables/dns_redirect_*.set | ipset restore
 
 # Restart WAN dependant services
-service miniupnpd restart
 #service wide-dhcpv6-client restart
 
 exit 0

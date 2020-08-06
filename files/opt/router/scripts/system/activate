@@ -20,7 +20,7 @@ while true; do
 		[Yy]* )
 			break;;
 		[Nn]* )
-			echo "Exiing ..."
+			echo "Exiting ..."
 			exit
 			break;;
 	esac
@@ -31,7 +31,7 @@ echo "######################################"
 echo "Replacing temporary install files"
 echo "######################################"
 echo
-	
+
 if [ -s /opt/router/install/.activated ]; then
 	echo "Router already activated ... skipping"
 else
@@ -40,7 +40,7 @@ else
 
 	echo "copying /opt/router/dnsmasq/dnsmasq.conf.router -> /opt/router/dnsmasq/dnsmasq.conf"
 	cp /opt/router/dnsmasq/dnsmasq.conf.router /opt/router/dnsmasq/dnsmasq.conf
-	
+
 	echo $(date +%s) > /opt/router/install/.activated
 fi
 
@@ -51,10 +51,10 @@ echo "######################################"
 echo
 
 echo -n "remapping ~/router/config/network_interfaces -> /etc/network/interfaces"
-ln -sf /etc/network/interfaces /root/router/config/network_interfaces && echo ok || echo FAILED
+ln -sf /etc/network/interfaces /home/router/config/network_interfaces && echo ok || echo FAILED
 
 echo -n "remapping ~/router/config/dhcp_base -> /opt/router/dnsmasq/dnsmasq.conf"
-ln -sf /opt/router/dnsmasq/dnsmasq.conf /root/router/config/dhcp_base && echo ok || echo FAILED
+ln -sf /opt/router/dnsmasq/dnsmasq.conf /home/router/config/dhcp_base && echo ok || echo FAILED
 
 echo
 echo "######################################"
